@@ -249,14 +249,22 @@ command_new() {
   require_english QUESTION "$question"
   [[ "$title$question" != *'"'* ]] || die "TITLE and QUESTION must not contain double quotes"
   [[ ! -e "$slug" ]] || die "$slug already exists here"
-  gh repo create "$org/$slug" --private --description "$title" >/dev/null || die "could not create $org/$slug"
   mkdir "$slug"
   cd "$slug"
   git init --quiet -b main
   write_research_files "$slug" "$title" "$question"
+  # Flakes see only tracked files, so stage before locking.
+  git add -A
   nix flake lock >/dev/null 2>&1 || die "could not lock github:$module; is it pushed?"
   git add -A
   git commit --quiet -m "chore: start the research"
+  # An empty repository left by an interrupted sw new is reused; one with history is not.
+  if gh repo view "$org/$slug" >/dev/null 2>&1; then
+    [[ $(gh api "repos/$org/$slug" --jq .size) == 0 ]] || die "$org/$slug already exists"
+    gh repo edit "$org/$slug" --description "$title" >/dev/null
+  else
+    gh repo create "$org/$slug" --private --description "$title" >/dev/null || die "could not create $org/$slug"
+  fi
   git remote add origin "git@github.com:$org/$slug.git"
   git push --quiet -u origin main
   issue_url=$(gh issue create -R "$org/$slug" --title "$title" --body "## Question"$'\n\n'"$question") ||
