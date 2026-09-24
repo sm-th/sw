@@ -4,6 +4,27 @@ A research is one repository and one wiki: a question, the sources that answer
 it, and short linked notes that carry the depth. Everything written to the
 repository or to GitHub is English, whatever language the conversation uses.
 
+## Starting a research
+
+A research starts as a conversation in the research folder
+(`~/sm-th/research`, or `SW_RESEARCH_ROOT`), before the user knows its name
+or its exact question. Talk in the user's language: help them find what they
+want to learn, read what they point to, and sharpen the question. When they
+ask to start the research, choose the rest yourself and never ask them to type
+it:
+
+- SLUG: two to five lowercase English words joined by hyphens, naming the
+  subject, not the answer (`composable-research-wikis`). It becomes the
+  repository name and the address `https://smith.wiki/SLUG/`, so it never
+  changes.
+- TITLE: the subject in a few English words.
+- QUESTION: the question the conversation arrived at, translated into
+  English, with the URLs the user gave.
+
+Run `sw new SLUG TITLE QUESTION` (`--private` when the user asks for a private
+research), tell the user the address it printed, and continue in the folder it
+printed: every later command runs there. When a SLUG is taken, choose another.
+
 ## What a research is
 
 - **It starts from zero.** Work only from this repository's pages, the

@@ -17,6 +17,12 @@ repositories have in common, so they hold only their pages.
 - `.github/workflows/check.yml` and `deploy.yml`: reusable workflows each
   research calls.
 
+A research starts as a conversation with an agent in the research folder,
+`~/sm-th/research` (override with `SW_RESEARCH_ROOT`), whose `AGENTS.md` sends
+the agent to `sw guide`. Once the question is clear, the agent chooses the
+repository name, title, and English question and runs `sw new`, which creates
+the research in a subfolder of that folder wherever it is run.
+
 ## Use
 
 A research repository's `flake.nix` takes this flake as an input and exposes
