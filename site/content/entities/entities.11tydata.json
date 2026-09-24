@@ -1,0 +1,6 @@
+{
+  "layout": "layouts/page.njk",
+  "eyebrow": "Entity",
+  "tags": ["entity"],
+  "templateEngineOverride": "md"
+}

@@ -1,0 +1,9 @@
+---
+layout: layouts/page.njk
+---
+{{ content | safe }}
+<ul>
+{% for item in collections[listTag] | byTitle %}
+  <li><a href="{{ item.url }}">{{ item.data.title | escape }}</a>{% if item.data.author %} ({{ item.data.author | escape }}, {% if item.data.published %}{{ item.data.published | year }}{% else %}n.d.{% endif %}){% endif %} &mdash; {{ item.data.summary | escape }}</li>
+{% endfor %}
+</ul>

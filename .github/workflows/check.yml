@@ -1,0 +1,74 @@
+name: Check research
+
+# Called by every research repository: `uses: sm-th/sw/.github/workflows/check.yml@main`.
+on:
+  workflow_call:
+    inputs:
+      sw-ref:
+        description: Ref of sm-th/sw whose tools and site kit check the research
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  issue-link:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a closing issue reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [[ ! "$PR_BODY" =~ ([Cc]loses|[Ff]ixes|[Rr]esolves)[[:space:]]+#[0-9]+ ]]; then
+            echo "Pull request body must contain Closes #N, Fixes #N, or Resolves #N."
+            exit 1
+          fi
+
+  ascii:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: sm-th/sw
+          ref: ${{ inputs.sw-ref }}
+          path: .sw
+      - name: Reject new non-ASCII content
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 .sw/lib/check_ascii.py --env PR_TITLE --env PR_BODY
+          python3 .sw/lib/check_ascii.py --commits "$BASE_SHA..$HEAD_SHA"
+          python3 .sw/lib/check_ascii.py --range "$BASE_SHA...$HEAD_SHA"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: sm-th/sw
+          ref: ${{ inputs.sw-ref }}
+          path: .sw
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix .sw/site
+      - name: Build under the published path
+        run: .sw/bin/sw build --prefix "/${{ github.event.repository.name }}/" _site
+      - run: python3 .sw/lib/check_internal_links.py _site --prefix "/${{ github.event.repository.name }}/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: _site
+          retention-days: 7

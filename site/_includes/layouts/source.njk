@@ -1,0 +1,38 @@
+---
+layout: layouts/base.njk
+---
+{% set citers = collections.all | citedBy(page.url) %}
+<article class="wiki-card source-card">
+  <header class="page-heading">
+    <p class="eyebrow">Source &middot; {{ kind | escape }}</p>
+    <h1>{{ title | escape }}</h1>
+    <p class="byline">
+      <span>{{ author | escape }}</span>
+      {% if publisher %}<span>{{ publisher | escape }}</span>{% endif %}
+      {% if published %}<time datetime="{{ published | machineDate | escape }}">{{ published | displayDate | escape }}</time>{% else %}<span>Undated</span>{% endif %}
+      <a href="{{ url | escape }}" rel="external">Original</a>
+    </p>
+    <p class="dek">{{ summary | escape }}</p>
+  </header>
+  <div class="prose">
+    {{ content | safe }}
+  </div>
+  {% if citers.length %}
+  <section class="source-cited-by" aria-labelledby="cited-by">
+    <h2 id="cited-by">Cited by</h2>
+    <ul>
+    {% for item in citers %}
+      <li><a href="{{ item.url }}">{{ item.data.title | escape }}</a></li>
+    {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  <details class="source-provenance">
+    <summary>Citation and capture</summary>
+    <p class="source-citation">{{ author | escape }} ({% if published %}{{ published | year }}{% else %}n.d.{% endif %}). <cite>{{ title | escape }}</cite>.{% if publisher %} {{ publisher | escape }}.{% endif %} {{ url | escape }}</p>
+    <p>
+      Retrieved <time datetime="{{ retrieved | machineDate | escape }}">{{ retrieved | utcTime | escape }}</time>
+      <br><code>sha256:{{ sha256 | escape }}</code>
+    </p>
+  </details>
+</article>

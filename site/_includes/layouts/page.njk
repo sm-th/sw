@@ -1,0 +1,13 @@
+---
+layout: layouts/base.njk
+---
+<article class="wiki-card">
+  <header class="page-heading">
+    {% if eyebrow %}<p class="eyebrow">{{ eyebrow | escape }}</p>{% endif %}
+    <h1>{{ title | escape }}</h1>
+    {% if summary %}<p class="dek">{{ summary | escape }}</p>{% endif %}
+  </header>
+  <div class="prose">
+    {{ content | safe }}
+  </div>
+</article>

@@ -1,0 +1,488 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+sw: work on Smith Wiki research repositories
+
+Usage:
+  sw                                   Show this research: its card, pages, Issues, and pull requests.
+  sw guide                             Print the research contract every agent follows.
+  sw new SLUG TITLE QUESTION           Create the research repository ORG/SLUG in ./SLUG, open its
+                                       question as Issue #1, and switch to the branch that answers it.
+  sw fetch URL [SOURCE] [--file FILE] [--recapture]
+                                       Capture and index a source, or return the current capture of an
+                                       URL this research already captured; --recapture replaces it.
+                                       With SOURCE, record it in sources/SOURCE.md.
+  sw fetch --hash SHA                  Restore a stored capture into the local cache.
+  sw search QUERY [--in sources|wiki] [--limit N]
+                                       Search this research's captures and its pages on origin/main.
+  sw search --sync                     Maintenance: rebuild this research's index.
+  sw search-eval [--chunkers A,B] [--models M,N]
+                                       Maintenance: measure chunkers and embedding models on Key points.
+  sw task [--queue] SLUG TITLE REQUEST Open an Issue and its branch.
+  sw start ISSUE SLUG                  Start work on a queued Issue.
+  sw commit MESSAGE [PATH...]          Stage PATHs (default: every change), tidy pages, check links and
+                                       ASCII, and commit (Conventional Commits).
+  sw pr TITLE BODY                     Push and open a pull request that closes the current Issue.
+  sw checks [PR]                       Wait for pull request checks; print OK or the failed checks.
+  sw merge [PR]                        Wait for checks, then merge the pull request.
+  sw build [--prefix PATH] [OUT]       Build the research site into OUT (default _site).
+  sw publish VERSION                   Tag VERSION (v1, v2, ...) on main, make the repository public,
+                                       and deploy it to https://smith.wiki/SLUG/.
+
+Text must be English; typographic quotes and dashes become ASCII. FILE is a
+copy of URL saved from a browser. Secrets come from $SW_ENV_FILE (default
+~/.config/sw/.env) through secretspec.
+EOF
+}
+
+die() {
+  printf 'sw: %s\n' "$*" >&2
+  exit 1
+}
+
+sw_root=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+lib="$sw_root/lib"
+site="$sw_root/site"
+org=${SW_ORG:-smith-wiki}
+registry=${SW_REGISTRY:-smith-wiki/smith-wiki.github.io}
+module=${SW_MODULE:-sm-th/sw}
+env_file=${SW_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/sw/.env}
+topic=smith-wiki-research
+sections=(sources notes entities)
+
+check_text() {
+  python3 "$lib/check_ascii.py" --text "$1" "$2"
+}
+
+require_english() {
+  check_text "$1" "$2" || die "$1 must be English; translate the user's words"
+}
+
+fold_typography() {
+  python3 "$lib/tidy.py" --text "$1"
+}
+
+require_clean() {
+  [[ -z $(git status --porcelain) ]] || die "$1"
+}
+
+validate_slug() {
+  [[ "$1" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "SLUG must use lowercase ASCII words and hyphens"
+}
+
+# Commands that work on a research run at the root of its repository.
+enter_research() {
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a research repository"
+  cd "$root"
+  [[ -f index.md ]] || die "$root has no index.md; it is not a research repository"
+}
+
+research_name() {
+  local url
+  url=$(git remote get-url origin) || die "the repository has no origin"
+  url=${url%/}
+  url=${url%.git}
+  printf '%s' "${url##*[/:]}"
+}
+
+front_value() {
+  local value
+  value=$(sed -n '2,/^---$/p' "$2" | grep -m 1 "^$1:" || true)
+  value=${value#"$1":}
+  value=${value# }
+  value=${value#[\"\']}
+  printf '%s' "${value%[\"\']}"
+}
+
+with_secrets() {
+  local reason=$1
+  shift
+  [[ -f "$env_file" ]] || die "missing $env_file; put the secrets declared in $sw_root/secretspec.toml there"
+  secretspec run -f "$sw_root/secretspec.toml" --provider "dotenv:$env_file" --reason "$reason" -- "$@"
+}
+
+print_limited() {
+  local limit=$1 label=$2
+  shift 2
+  local items=("$@") total=$# index
+  printf '%-14s: ' "$label"
+  if (( total == 0 )); then
+    printf 'none\n'
+    return
+  fi
+  for ((index = 0; index < total && index < limit; index++)); do
+    (( index == 0 )) || printf ', '
+    printf '%s' "${items[index]}"
+  done
+  (( total <= limit )) || printf ', ... (+%d more)' "$((total - limit))"
+  printf '\n'
+}
+
+load_lines() {
+  local array_name=$1 label=$2 output
+  shift 2
+  output=$("$@") || die "$label"
+  mapfile -t "$array_name" </dev/null
+  [[ -z "$output" ]] || mapfile -t "$array_name" <<<"$output"
+}
+
+command_overview() {
+  enter_research
+  local branch dirty section path
+  local -a items
+  branch=$(git branch --show-current)
+  dirty=""
+  [[ -z $(git status --porcelain) ]] || dirty=" dirty"
+  printf '%s | %s%s\n' "$(research_name)" "${branch:-detached}" "$dirty"
+  printf '%-14s: %s\n' Title "$(front_value title index.md)"
+  printf '%-14s: %s\n' Question "$(front_value question index.md)"
+  for section in "${sections[@]}"; do
+    items=()
+    while IFS= read -r path; do
+      [[ -n "$path" ]] && items+=("$(front_value title "$path") [$(basename "$path" .md)]")
+    done < <(git ls-files "$section/*.md" | sort)
+    print_limited 20 "$section" "${items[@]}"
+  done
+  if ! gh auth status >/dev/null 2>&1; then
+    printf 'GitHub: unavailable; run gh auth login\n'
+    return
+  fi
+  load_lines items "could not list Issues" \
+    gh issue list --state open --limit 100 --json number,title --jq '.[] | "#\(.number) \(.title)"'
+  print_limited 20 Issues "${items[@]}"
+  load_lines items "could not list pull requests" \
+    gh pr list --state open --limit 100 --json number,title,headRefName --jq '.[] | "#\(.number) \(.title) [\(.headRefName)]"'
+  print_limited 20 "Pull requests" "${items[@]}"
+}
+
+write_research_files() {
+  local slug=$1 title=$2 question=$3
+  cat >AGENTS.md <<EOF
+# Smith Wiki research: $title
+
+This repository is one Smith Wiki research. Before any work, run \`sw guide\`
+and follow the contract it prints; \`nix develop\` (or direnv) provides \`sw\`.
+Everything written to this repository or to GitHub is English.
+EOF
+  cat >README.md <<EOF
+# $title
+
+Question: $question
+
+A Smith Wiki research, written by agents from preserved sources. Published
+versions are served at https://smith.wiki/$slug/.
+EOF
+  cat >index.md <<EOF
+---
+title: "$title"
+question: "$question"
+brief: "Not answered yet."
+date: $(date -u +%Y-%m-%d)
+---
+
+## Answer
+
+Not answered yet.
+EOF
+  cat >flake.nix <<EOF
+{
+  description = "Smith Wiki research: $slug";
+
+  inputs.sw.url = "github:$module";
+
+  outputs = { sw, ... }: { inherit (sw) devShells; };
+}
+EOF
+  printf 'use flake\n' >.envrc
+  printf '.direnv/\n_site/\n' >.gitignore
+  mkdir -p .github/workflows
+  cat >.github/workflows/check.yml <<EOF
+name: Check research
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: $module/.github/workflows/check.yml@main
+EOF
+  cat >.github/workflows/deploy.yml <<EOF
+name: Deploy research
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Pages serves public repositories only; a research deploys once it is published.
+    if: github.event.repository.visibility == 'public'
+    uses: $module/.github/workflows/deploy.yml@main
+EOF
+}
+
+command_new() {
+  (( $# == 3 )) || die "usage: sw new SLUG TITLE QUESTION"
+  local slug=$1 title question issue_url
+  title=$(fold_typography "$2")
+  question=$(fold_typography "$3")
+  validate_slug "$slug"
+  [[ "$slug" != *--* ]] || die "SLUG must not contain --"
+  require_english TITLE "$title"
+  require_english QUESTION "$question"
+  [[ "$title$question" != *'"'* ]] || die "TITLE and QUESTION must not contain double quotes"
+  [[ ! -e "$slug" ]] || die "$slug already exists here"
+  gh repo create "$org/$slug" --private --description "$title" >/dev/null || die "could not create $org/$slug"
+  mkdir "$slug"
+  cd "$slug"
+  git init --quiet -b main
+  write_research_files "$slug" "$title" "$question"
+  nix flake lock >/dev/null 2>&1 || die "could not lock github:$module; is it pushed?"
+  git add -A
+  git commit --quiet -m "chore: start the research"
+  git remote add origin "git@github.com:$org/$slug.git"
+  git push --quiet -u origin main
+  issue_url=$(gh issue create -R "$org/$slug" --title "$title" --body "## Question"$'\n\n'"$question") ||
+    die "could not open the question Issue"
+  git switch --quiet -c "issue/${issue_url##*/}-$slug"
+  printf 'research: https://github.com/%s/%s\nquestion: %s\nbranch: %s\n' \
+    "$org" "$slug" "$issue_url" "$(git branch --show-current)"
+}
+
+command_open() {
+  enter_research
+  local queue=false slug title request issue_url
+  if [[ ${1:-} == --queue ]]; then
+    queue=true
+    shift
+  fi
+  (( $# == 3 )) || die "usage: sw task [--queue] SLUG TITLE REQUEST"
+  slug=$1
+  title=$(fold_typography "$2")
+  request=$(fold_typography "$3")
+  validate_slug "$slug"
+  [[ -n "$request" ]] || die "REQUEST must not be empty"
+  require_english TITLE "$title"
+  require_english REQUEST "$request"
+  [[ "$queue" == true ]] || require_clean "commit or discard tracked changes before starting work"
+  issue_url=$(gh issue create --title "$title" --body "## Request"$'\n\n'"$request") || die "could not create Issue"
+  printf '%s\n' "$issue_url"
+  [[ "$queue" == true ]] || switch_to_issue_branch "${issue_url##*/}" "$slug"
+}
+
+switch_to_issue_branch() {
+  git fetch --quiet origin main
+  git switch -c "issue/$1-$2" origin/main
+}
+
+command_start() {
+  enter_research
+  (( $# == 2 )) || die "usage: sw start ISSUE SLUG"
+  [[ "$1" =~ ^[0-9]+$ ]] || die "ISSUE must be a number"
+  validate_slug "$2"
+  require_clean "commit or discard tracked changes before starting work"
+  [[ $(gh issue view "$1" --json state --jq .state) == OPEN ]] || die "issue #$1 is not open"
+  switch_to_issue_branch "$1" "$2"
+}
+
+current_issue() {
+  local branch
+  branch=$(git branch --show-current)
+  [[ "$branch" =~ ^issue/([0-9]+)-[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "current branch must be issue/<number>-<slug>"
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+command_commit() {
+  enter_research
+  (( $# >= 1 )) || die "usage: sw commit MESSAGE [PATH...]"
+  local message page
+  local -a pages=()
+  message=$(fold_typography "$1")
+  shift
+  check_text commit-message "$message"
+  [[ "$message" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?:\ [[:alnum:]] ]] ||
+    die "commit message must follow Conventional Commits"
+  if (( $# == 0 )); then git add -A; else git add -- "$@"; fi
+  ! git diff --cached --quiet || die "nothing to commit"
+  while IFS= read -r page; do
+    pages+=("$page")
+  done < <(git diff --cached --name-only --diff-filter=AMR -- index.md 'sources/*.md' 'notes/*.md' 'entities/*.md')
+  if (( ${#pages[@]} > 0 )); then
+    python3 "$lib/tidy.py" "${pages[@]}" || die "fix the links above, then commit again"
+    git add -- "${pages[@]}"
+  fi
+  git diff --cached --check
+  python3 "$lib/check_ascii.py" --staged
+  git commit -m "$message"
+}
+
+command_pr() {
+  enter_research
+  (( $# == 2 )) || die "usage: sw pr TITLE BODY"
+  local title summary issue branch body
+  title=$(fold_typography "$1")
+  summary=$(fold_typography "$2")
+  check_text pr-title "$title"
+  require_clean "commit all tracked changes before opening a pull request"
+  issue=$(current_issue)
+  [[ $(gh issue view "$issue" --json state --jq .state) == OPEN ]] || die "issue #$issue is not open"
+  branch=$(git branch --show-current)
+  git fetch --quiet origin main
+  python3 "$lib/check_ascii.py" --range "origin/main...HEAD"
+  python3 "$lib/check_ascii.py" --commits "origin/main..HEAD"
+  body="Closes #$issue"$'\n\n'"$summary"
+  check_text pr-body "$body"
+  git push -u origin "$branch"
+  gh pr create --base main --head "$branch" --title "$title" --body "$body"
+}
+
+command_checks() {
+  (( $# <= 1 )) || die "usage: sw checks [PR]"
+  local deadline=$((SECONDS + 1800)) json failed
+  while :; do
+    json=$(gh pr checks "$@" --json name,bucket,link 2>/dev/null || true)
+    if [[ -n "$json" ]] && jq -e 'length > 0 and all(.bucket != "pending")' <<<"$json" >/dev/null; then
+      break
+    fi
+    (( SECONDS < deadline )) || die "checks still pending after 30 minutes"
+    sleep 10
+  done
+  failed=$(jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "\(.name): \(.link)"' <<<"$json")
+  if [[ -n "$failed" ]]; then
+    printf 'failed checks:\n%s\n' "$failed"
+    return 1
+  fi
+  printf 'OK\n'
+}
+
+command_merge() {
+  (( $# <= 1 )) || die "usage: sw merge [PR]"
+  local pr=${1:-} out attempt
+  if [[ -z "$pr" ]]; then
+    pr=$(gh pr view --json number --jq .number) || die "current branch has no pull request"
+  fi
+  [[ $(gh pr view "$pr" --json baseRefName --jq .baseRefName) == main ]] || die "#$pr does not target main"
+  if ! out=$(command_checks "$pr"); then
+    printf '%s\n' "$out"
+    die "not merging #$pr"
+  fi
+  # gh prints worktree cleanup advice when the branch is checked out here; the session keeps its worktree.
+  for attempt in 1 2 3; do
+    if out=$(gh pr merge "$pr" --merge --delete-branch 2>&1); then
+      break
+    fi
+    (( attempt < 3 )) || { printf '%s\n' "$out" >&2; die "could not merge #$pr"; }
+    sleep 10
+  done
+  printf 'merged #%s\n' "$pr"
+}
+
+command_build() {
+  enter_research
+  local prefix=/ out=_site stage name version eleventy section
+  while (( $# > 0 )); do
+    case $1 in
+      --prefix) (( $# >= 2 )) || die "--prefix needs a path"; prefix=$2; shift 2 ;;
+      -*) die "unknown option: $1" ;;
+      *) out=$1; shift ;;
+    esac
+  done
+  eleventy="$site/node_modules/@11ty/eleventy/cmd.cjs"
+  [[ -f "$eleventy" ]] || die "the site kit has no node_modules; run npm ci --prefix $site"
+  [[ "$out" == /* ]] || out="$PWD/$out"
+  name=$(research_name)
+  version=$(git describe --tags --exact-match 2>/dev/null || printf 'draft')
+  stage=$(mktemp -d)
+  # The kit supplies layouts, assets, section pages, and page data; the research supplies its pages.
+  cp -R "$site/content/." "$stage/"
+  cp -R "$site/_includes" "$site/assets" "$stage/"
+  # Kit files copied from the Nix store are read-only; the research's pages go into the same folders.
+  chmod -R u+w "$stage"
+  cp index.md "$stage/"
+  for section in "${sections[@]}"; do
+    [[ -d "$section" ]] || continue
+    find "$section" -maxdepth 1 -name '*.md' -exec cp {} "$stage/$section/" \;
+  done
+  rm -rf "$out"
+  (
+    cd "$stage"
+    SW_RESEARCH=$name SW_REPOSITORY_URL="https://github.com/$org/$name" SW_VERSION=$version PATH_PREFIX=$prefix \
+      node "$eleventy" --config="$site/eleventy.config.js" --input=. --output="$out" --quiet
+  ) || { rm -rf "$stage"; die "the site did not build"; }
+  rm -rf "$stage"
+  printf 'built %s (%s) into %s\n' "$name" "$version" "$out"
+}
+
+command_publish() {
+  enter_research
+  (( $# == 1 )) || die "usage: sw publish VERSION"
+  local version=$1 name repo
+  [[ "$version" =~ ^v[0-9]+$ ]] || die "VERSION must be v1, v2, ..."
+  name=$(research_name)
+  repo="$org/$name"
+  require_clean "commit all tracked changes before publishing"
+  [[ $(git branch --show-current) == main ]] || die "publish from main"
+  git fetch --quiet --tags origin main
+  [[ $(git rev-parse HEAD) == $(git rev-parse origin/main) ]] || die "main is not origin/main; pull first"
+  ! git rev-parse -q --verify "refs/tags/$version" >/dev/null || die "$version already exists"
+  git tag -a "$version" -m "Publish $version"
+  git push --quiet origin "$version"
+  if [[ $(gh repo view "$repo" --json visibility --jq .visibility) != PUBLIC ]]; then
+    gh repo edit "$repo" --visibility public --accept-visibility-change-consequences
+  fi
+  gh api "repos/$repo/pages" >/dev/null 2>&1 ||
+    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null || die "could not enable Pages"
+  gh repo edit "$repo" --add-topic "$topic" --homepage "https://smith.wiki/$name/"
+  gh workflow run deploy.yml -R "$repo" --ref main
+  gh api -X POST "repos/$registry/dispatches" -f event_type=research-published >/dev/null ||
+    printf 'sw: the registry did not accept the dispatch; it rebuilds hourly\n' >&2
+  printf 'published %s %s: https://smith.wiki/%s/ once the deploy finishes\n' "$repo" "$version" "$name"
+}
+
+if (( $# == 0 )); then
+  command_overview
+  exit
+fi
+
+command=$1
+shift
+for arg in "$@"; do
+  [[ "$arg" == -h || "$arg" == --help ]] && { usage; exit; }
+done
+case "$command" in
+  help|-h|--help) usage ;;
+  guide) cat "$sw_root/GUIDE.md" ;;
+  new) command_new "$@" ;;
+  task) command_open "$@" ;;
+  start) command_start "$@" ;;
+  fetch) enter_research; with_secrets "sw fetch: capture a research source into the private R2 store and index it" \
+    python3 "$lib/fetch.py" "$@" ;;
+  search) enter_research; with_secrets "sw search: search this research's captures and pages" \
+    python3 "$lib/search.py" "$@" ;;
+  search-eval) enter_research; with_secrets "sw search-eval: measure chunkers and embedding models on Key points" \
+    python3 "$lib/search_eval.py" "$@" ;;
+  commit) command_commit "$@" ;;
+  pr) command_pr "$@" ;;
+  checks) command_checks "$@" ;;
+  merge) command_merge "$@" ;;
+  build) command_build "$@" ;;
+  publish) command_publish "$@" ;;
+  *) die "unknown command: $command; run 'sw help'" ;;
+esac

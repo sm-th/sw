@@ -1,0 +1,5 @@
+.direnv/
+_site/
+result
+__pycache__/
+site/node_modules/

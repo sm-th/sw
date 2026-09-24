@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self' https://g.smith.wiki; connect-src https://g.smith.wiki; img-src 'self' data: https://g.smith.wiki; font-src 'self'; base-uri 'none'; form-action 'none'">
+    <meta name="description" content="{{ (brief or summary or 'A Smith Wiki research with preserved sources.') | escape }}">
+    <title>{% if title %}{{ title | escape }} · {% endif %}Smith Wiki</title>
+    <link rel="stylesheet" href="/assets/site.css">
+    <script src="/assets/posthog.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="https://smith.wiki/" aria-label="Smith Wiki: all research">Smith<span>Wiki</span></a>
+      <nav aria-label="Research navigation">
+        <a href="/">Research</a>
+        <a href="/notes/">Notes</a>
+        <a href="/sources/">Sources</a>
+        <a href="/entities/">Entities</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      {{ content | safe }}
+    </main>
+    <footer class="site-footer">
+      <p>Written by agents from preserved sources.{% if research.repository %} <a href="{{ research.repository | escape }}" rel="external">Repository</a>{% endif %}{% if research.version %} &middot; {{ research.version | escape }}{% endif %}</p>
+    </footer>
+  </body>
+</html>

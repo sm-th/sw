@@ -1,0 +1,17 @@
+{
+  "name": "sw-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Site kit for Smith Wiki research repositories",
+  "scripts": {
+    "build": "eleventy",
+    "serve": "eleventy --serve"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "3.1.2",
+    "markdown-it": "14.1.0"
+  }
+}

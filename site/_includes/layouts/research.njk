@@ -1,0 +1,30 @@
+---
+layout: layouts/base.njk
+---
+<article class="wiki-card research-card">
+  <header class="page-heading">
+    <p class="eyebrow">Research{% if research.version %} &middot; {{ research.version | escape }}{% endif %}</p>
+    <h1>{{ title | escape }}</h1>
+    <p class="byline">
+      {% if date %}<time datetime="{{ date | machineDate | escape }}">{{ date | displayDate | escape }}</time>{% endif %}
+      <span>Question: {{ question | escape }}</span>
+    </p>
+    <p class="dek">{{ brief | escape }}</p>
+  </header>
+  <div class="prose">
+    {{ content | safe }}
+  </div>
+</article>
+{% for section in [["Notes", "note"], ["Entities", "entity"], ["Sources", "source"]] %}
+{% set items = collections[section[1]] %}
+{% if items and items.length %}
+<section class="research-section" aria-labelledby="section-{{ section[1] }}">
+  <h2 id="section-{{ section[1] }}">{{ section[0] }}</h2>
+  <ul>
+  {% for item in items | byTitle %}
+    <li><a href="{{ item.url }}">{{ item.data.title | escape }}</a>{% if item.data.author %} ({{ item.data.author | escape }}, {% if item.data.published %}{{ item.data.published | year }}{% else %}n.d.{% endif %}){% endif %} &mdash; {{ item.data.summary | escape }}</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endfor %}
