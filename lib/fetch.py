@@ -483,6 +483,7 @@ def record_in_page(worktree: Path, slug: str, capture: Capture) -> str:
     path = worktree / "sources" / f"{slug}.md"
     stamp = [f"retrieved: {capture.retrieved}", f"sha256: {scalar(capture.sha256)}"]
     if not path.exists():
+        path.parent.mkdir(exist_ok=True)
         meta = capture.meta
         lines = ["---", f"title: {scalar(meta.get('title', ''))}", 'summary: ""', f"url: {capture.url}"]
         lines.append(f"author: {scalar(meta.get('author', ''))}")
