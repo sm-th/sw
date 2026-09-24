@@ -44,6 +44,8 @@ one dotenv file, `~/.config/sw/.env` (override with `SW_ENV_FILE`).
 
 The organization site `smith-wiki/smith-wiki.github.io` owns the `smith.wiki`
 domain, so GitHub Pages serves each public research repository at
-`smith.wiki/<repository>/`. `sw publish` makes the repository public, enables
-Pages, tags it `smith-wiki-research`, and asks the registry on `smith.wiki` to
-rebuild.
+`smith.wiki/<repository>/`. `sw new` creates a public research by default:
+it enables Pages, tags the repository `smith-wiki-research`, and asks the
+registry on `smith.wiki` to rebuild; every merge to main redeploys the site.
+`sw new --private` keeps a research private until `sw make-public`.
+`sw publish vN` freezes a version as a tag and redeploys with it.

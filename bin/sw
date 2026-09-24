@@ -8,8 +8,10 @@ sw: work on Smith Wiki research repositories
 Usage:
   sw                                   Show this research: its card, pages, Issues, and pull requests.
   sw guide                             Print the research contract every agent follows.
-  sw new SLUG TITLE QUESTION           Create the research repository ORG/SLUG in ./SLUG, open its
-                                       question as Issue #1, and switch to the branch that answers it.
+  sw new [--private] SLUG TITLE QUESTION
+                                       Create the research repository ORG/SLUG in ./SLUG, public and
+                                       served at https://smith.wiki/SLUG/ unless --private; open its
+                                       question as Issue #1 and switch to the branch that answers it.
   sw fetch URL [SOURCE] [--file FILE] [--recapture]
                                        Capture and index a source, or return the current capture of an
                                        URL this research already captured; --recapture replaces it.
@@ -28,8 +30,9 @@ Usage:
   sw checks [PR]                       Wait for pull request checks; print OK or the failed checks.
   sw merge [PR]                        Wait for checks, then merge the pull request.
   sw build [--prefix PATH] [OUT]       Build the research site into OUT (default _site).
-  sw publish VERSION                   Tag VERSION (v1, v2, ...) on main, make the repository public,
-                                       and deploy it to https://smith.wiki/SLUG/.
+  sw publish VERSION                   Tag VERSION (v1, v2, ...) on main as a frozen version and
+                                       redeploy the site with it.
+  sw make-public                       Open a private research: make it public and serve it.
 
 Text must be English; typographic quotes and dashes become ASCII. FILE is a
 copy of URL saved from a browser. Secrets come from $SW_ENV_FILE (default
@@ -239,7 +242,12 @@ EOF
 }
 
 command_new() {
-  (( $# == 3 )) || die "usage: sw new SLUG TITLE QUESTION"
+  local visibility=public
+  if [[ ${1:-} == --private ]]; then
+    visibility=private
+    shift
+  fi
+  (( $# == 3 )) || die "usage: sw new [--private] SLUG TITLE QUESTION"
   local slug=$1 title question issue_url
   title=$(fold_typography "$2")
   question=$(fold_typography "$3")
@@ -261,17 +269,22 @@ command_new() {
   # An empty repository left by an interrupted sw new is reused; one with history is not.
   if gh repo view "$org/$slug" >/dev/null 2>&1; then
     [[ $(gh api "repos/$org/$slug" --jq .size) == 0 ]] || die "$org/$slug already exists"
-    gh repo edit "$org/$slug" --description "$title" >/dev/null
+    gh repo edit "$org/$slug" --description "$title" --visibility "$visibility" \
+      --accept-visibility-change-consequences >/dev/null
   else
-    gh repo create "$org/$slug" --private --description "$title" >/dev/null || die "could not create $org/$slug"
+    gh repo create "$org/$slug" "--$visibility" --description "$title" >/dev/null || die "could not create $org/$slug"
   fi
+  # Pages must exist before the first push, whose deploy serves a public research at once.
+  [[ "$visibility" == private ]] || serve_research "$org/$slug" "$slug"
   git remote add origin "git@github.com:$org/$slug.git"
   git push --quiet -u origin main
+  [[ "$visibility" == private ]] || announce_research
   issue_url=$(gh issue create -R "$org/$slug" --title "$title" --body "## Question"$'\n\n'"$question") ||
     die "could not open the question Issue"
   git switch --quiet -c "issue/${issue_url##*/}-$slug"
-  printf 'research: https://github.com/%s/%s\nquestion: %s\nbranch: %s\n' \
-    "$org" "$slug" "$issue_url" "$(git branch --show-current)"
+  printf 'research: https://github.com/%s/%s (%s)\nquestion: %s\nbranch: %s\n' \
+    "$org" "$slug" "$visibility" "$issue_url" "$(git branch --show-current)"
+  [[ "$visibility" == private ]] || printf 'site: https://smith.wiki/%s/\n' "$slug"
 }
 
 command_open() {
@@ -438,6 +451,19 @@ command_build() {
   printf 'built %s (%s) into %s\n' "$name" "$version" "$out"
 }
 
+# Enable Pages and list the research in the registry; its deploy serves it at smith.wiki/<research>/.
+serve_research() {
+  local repo=$1 name=$2
+  gh api "repos/$repo/pages" >/dev/null 2>&1 ||
+    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null || die "could not enable Pages for $repo"
+  gh repo edit "$repo" --add-topic "$topic" --homepage "https://smith.wiki/$name/" >/dev/null
+}
+
+announce_research() {
+  gh api -X POST "repos/$registry/dispatches" -f event_type=research-published >/dev/null ||
+    printf 'sw: the registry did not accept the dispatch; it rebuilds hourly\n' >&2
+}
+
 command_publish() {
   enter_research
   (( $# == 1 )) || die "usage: sw publish VERSION"
@@ -453,15 +479,26 @@ command_publish() {
   git tag -a "$version" -m "Publish $version"
   git push --quiet origin "$version"
   if [[ $(gh repo view "$repo" --json visibility --jq .visibility) != PUBLIC ]]; then
-    gh repo edit "$repo" --visibility public --accept-visibility-change-consequences
+    printf 'tagged %s %s; the research is private, so nothing is served\n' "$repo" "$version"
+    return
   fi
-  gh api "repos/$repo/pages" >/dev/null 2>&1 ||
-    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null || die "could not enable Pages"
-  gh repo edit "$repo" --add-topic "$topic" --homepage "https://smith.wiki/$name/"
   gh workflow run deploy.yml -R "$repo" --ref main
-  gh api -X POST "repos/$registry/dispatches" -f event_type=research-published >/dev/null ||
-    printf 'sw: the registry did not accept the dispatch; it rebuilds hourly\n' >&2
+  announce_research
   printf 'published %s %s: https://smith.wiki/%s/ once the deploy finishes\n' "$repo" "$version" "$name"
+}
+
+command_make_public() {
+  enter_research
+  (( $# == 0 )) || die "usage: sw make-public"
+  local name repo
+  name=$(research_name)
+  repo="$org/$name"
+  [[ $(gh repo view "$repo" --json visibility --jq .visibility) != PUBLIC ]] || die "$repo is already public"
+  gh repo edit "$repo" --visibility public --accept-visibility-change-consequences
+  serve_research "$repo" "$name"
+  gh workflow run deploy.yml -R "$repo" --ref main
+  announce_research
+  printf 'opened %s: https://smith.wiki/%s/ once the deploy finishes\n' "$repo" "$name"
 }
 
 if (( $# == 0 )); then
@@ -492,5 +529,6 @@ case "$command" in
   merge) command_merge "$@" ;;
   build) command_build "$@" ;;
   publish) command_publish "$@" ;;
+  make-public) command_make_public "$@" ;;
   *) die "unknown command: $command; run 'sw help'" ;;
 esac

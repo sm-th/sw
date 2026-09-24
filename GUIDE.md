@@ -9,9 +9,11 @@ repository or to GitHub is English, whatever language the conversation uses.
 - **It starts from zero.** Work only from this repository's pages, the
   sources it captures, and published versions of other researches cited as
   sources. Never read or edit another research's working state.
-- **It ends as a frozen version.** `sw publish v1` tags main and serves it at
-  `https://smith.wiki/<research>/`. A later change is a new version, never an
-  edit of the published one. Publish only when the user asks.
+- **It is public from the start** unless it was created with
+  `sw new --private`: main is served at `https://smith.wiki/<research>/`
+  after every merge. `sw publish v1` freezes a version as a tag; a later change
+  is a new version, never an edit of the published one. Publish, and open a
+  private research with `sw make-public`, only when the user asks.
 - **Other researches are sources.** Cite a published research by capturing the
   page you rely on with `sw fetch` and linking its source page, like any other
   source.
